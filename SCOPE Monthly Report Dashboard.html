@@ -1775,7 +1775,6 @@ body {
         <select id="monthFilter"></select>
       </div>
       <button class="btn-secondary btn" onclick="document.getElementById('fileInputReload').click()">📁 โหลดไฟล์ใหม่</button>
-      <button class="btn btn-export" onclick="printAllSections()" title="Export ทุกหน้าเป็น PDF — ใช้ส่ง Canva ได้">📄 Export PDF</button>
       <input type="file" id="fileInputReload" accept=".xlsx,.xls" style="display: none;">
     </div>
   </header>
@@ -2473,8 +2472,16 @@ function getMonthValue(str) {
 }
 
 /* ============== EXCEL PARSING ============== */
-async function loadExcelFile(file) {
-  const buffer = await file.arrayBuffer();
+async function loadExcelFile(input) {
+  // Accept either a File/Blob (from upload) or an ArrayBuffer (from fetch)
+  let buffer;
+  if (input instanceof ArrayBuffer) {
+    buffer = input;
+  } else if (input && typeof input.arrayBuffer === 'function') {
+    buffer = await input.arrayBuffer();
+  } else {
+    throw new Error('loadExcelFile: invalid input (expected File, Blob, or ArrayBuffer)');
+  }
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
   const data = {};
 
@@ -2510,6 +2517,32 @@ async function loadExcelFile(file) {
 
   toast('โหลดข้อมูลสำเร็จ ✓');
   initDashboard();
+}
+
+// Auto-fetch the bundled Excel data when hosted on a server (GitHub Pages, etc.)
+// Tries common filenames in order; first one that succeeds wins.
+async function loadExcelFromUrl(url) {
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+  const buffer = await response.arrayBuffer();
+  await loadExcelFile(buffer);
+}
+
+async function tryAutoLoad() {
+  const candidates = [
+    './DATA_Scope_with_April.xlsx',
+    './DATA_Dash_Board_Scope_-_Rawdata.xlsx',
+    './data.xlsx',
+  ];
+  for (const url of candidates) {
+    try {
+      await loadExcelFromUrl(url);
+      return true;
+    } catch (e) {
+      // Silently try next candidate
+    }
+  }
+  return false;
 }
 
 function tryLoadFromStorage() {
@@ -5765,21 +5798,27 @@ function setupFileUpload(inputId, zoneId = null) {
 }
 
 /* ============== ON LOAD ============== */
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   loadImages();
   loadNotes();
   setupFileUpload('fileInput', 'uploadZone');
   setupFileUpload('fileInputReload');
 
-  // Try loading from localStorage
+  // 1) Try auto-fetch from bundled file (works when hosted via http/https — e.g., GitHub Pages)
+  const autoLoaded = await tryAutoLoad();
+  if (autoLoaded) return;
+
+  // 2) Fallback: try localStorage (returning user with cached data)
   if (tryLoadFromStorage()) {
     setTimeout(() => initDashboard(), 400);
-  } else {
-    setTimeout(() => {
-      document.getElementById('loadingScreen').classList.add('hidden');
-      document.getElementById('emptyState').classList.remove('hidden');
-    }, 600);
+    return;
   }
+
+  // 3) Last resort: show empty state with upload prompt (only when no URL + no cache)
+  setTimeout(() => {
+    document.getElementById('loadingScreen').classList.add('hidden');
+    document.getElementById('emptyState').classList.remove('hidden');
+  }, 600);
 });
 
 // Register Chart.js DataLabels plugin globally - safe call
